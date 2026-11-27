@@ -19,10 +19,18 @@ jobs:
         with:
           java-version: '21'
           distribution: 'temurin'
-          cache: 'gradle'
 
-      - name: Ensure gradlew is executable
-        run: chmod +x ./gradlew
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.14'
+
+      - name: Generate wrapper if missing
+        run: |
+          if [ ! -f ./gradlew ]; then
+            gradle wrapper --gradle-version 8.14 --distribution-type bin
+          fi
+          chmod +x ./gradlew
 
       - name: Compile Java sources
         run: ./gradlew compileJava --no-daemon
