@@ -1,0 +1,14 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "dev.engsplay.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "client": [
+    "InGameHudMixin",
+    "MouseMixin",
+    "GameRendererMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}
