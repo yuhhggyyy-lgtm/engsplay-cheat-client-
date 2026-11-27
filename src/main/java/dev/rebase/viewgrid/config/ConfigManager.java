@@ -16,10 +16,12 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 
 public final class ConfigManager {
@@ -27,138 +29,122 @@ public final class ConfigManager {
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
 
     private final ModuleManager moduleManager;
-    private final Path configPath;
+    private final Path filePath;
 
-    private boolean audioFeedback = true;
-    private boolean compactCards = false;
-    private String lastCategory = "VISUALS";
+    private boolean soundFeedback = true;
+    private boolean compactLayout = false;
+    private String selectedCategory = "VISUALS";
 
     public ConfigManager(ModuleManager moduleManager) {
         this.moduleManager = moduleManager;
-        this.configPath = FabricLoader.getInstance()
+        this.filePath = FabricLoader.getInstance()
             .getConfigDir()
             .resolve("viewgrid")
-            .resolve("config.json");
+            .resolve("settings.json");
     }
 
     public void load() {
-        if (!Files.exists(this.configPath)) {
+        if (!Files.exists(this.filePath)) {
             save();
             return;
         }
         try {
-            String raw = Files.readString(this.configPath, StandardCharsets.UTF_8);
-            JsonElement parsed = JsonParser.parseString(raw);
-            if (!parsed.isJsonObject()) {
-                ViewGridMod.LOGGER.warn("Config root not a JSON object; writing defaults");
+            String content = Files.readString(this.filePath, StandardCharsets.UTF_8);
+            JsonElement rootEl = JsonParser.parseString(content);
+            if (!rootEl.isJsonObject()) {
                 save();
                 return;
             }
-            JsonObject root = parsed.getAsJsonObject();
-            int version = root.has("schemaVersion") && root.get("schemaVersion").isJsonPrimitive()
-                ? root.get("schemaVersion").getAsInt()
-                : SCHEMA_VERSION;
-            if (version != SCHEMA_VERSION) {
-                ViewGridMod.LOGGER.warn("Config schemaVersion {} differs from expected {}; clamping fields", version, SCHEMA_VERSION);
+            JsonObject root = rootEl.getAsJsonObject();
+            if (root.has("soundFeedback") && root.get("soundFeedback").isJsonPrimitive()) {
+                this.soundFeedback = root.get("soundFeedback").getAsBoolean();
+            }
+            if (root.has("compactLayout") && root.get("compactLayout").isJsonPrimitive()) {
+                this.compactLayout = root.get("compactLayout").getAsBoolean();
+            }
+            if (root.has("selectedCategory") && root.get("selectedCategory").isJsonPrimitive()) {
+                this.selectedCategory = root.get("selectedCategory").getAsString();
             }
 
-            if (root.has("audioFeedback") && root.get("audioFeedback").isJsonPrimitive()) {
-                this.audioFeedback = root.get("audioFeedback").getAsBoolean();
-            }
-            if (root.has("compactCards") && root.get("compactCards").isJsonPrimitive()) {
-                this.compactCards = root.get("compactCards").getAsBoolean();
-            }
-            if (root.has("lastCategory") && root.get("lastCategory").isJsonPrimitive()) {
-                this.lastCategory = root.get("lastCategory").getAsString();
-            }
-
-            JsonObject modulesObj = root.has("modules") && root.get("modules").isJsonObject()
+            JsonObject modsJson = root.has("modules") && root.get("modules").isJsonObject()
                 ? root.getAsJsonObject("modules")
                 : new JsonObject();
 
-            for (Module module : this.moduleManager.getModules()) {
-                if (!modulesObj.has(module.getId()) || !modulesObj.get(module.getId()).isJsonObject()) {
+            for (Module mod : this.moduleManager.getAll()) {
+                if (!modsJson.has(mod.getId()) || !modsJson.get(mod.getId()).isJsonObject()) {
                     continue;
                 }
-                JsonObject mObj = modulesObj.getAsJsonObject(module.getId());
-                if (mObj.has("enabled") && mObj.get("enabled").isJsonPrimitive()) {
-                    module.setEnabled(mObj.get("enabled").getAsBoolean());
+                JsonObject mJson = modsJson.getAsJsonObject(mod.getId());
+                if (mJson.has("enabled") && mJson.get("enabled").isJsonPrimitive()) {
+                    mod.setEnabled(mJson.get("enabled").getAsBoolean());
                 }
-                if (mObj.has("keybind") && mObj.get("keybind").isJsonPrimitive()) {
-                    int kc = mObj.get("keybind").getAsInt();
+                if (mJson.has("keybind") && mJson.get("keybind").isJsonPrimitive()) {
+                    int kc = mJson.get("keybind").getAsInt();
                     if (kc >= GLFW.GLFW_KEY_UNKNOWN && kc <= GLFW.GLFW_KEY_LAST) {
-                        module.setKeybind(kc);
+                        mod.setKeybind(kc);
                     }
                 }
-                if (mObj.has("settings") && mObj.get("settings").isJsonObject()) {
-                    JsonObject sObj = mObj.getAsJsonObject("settings");
-                    for (Setting<?> setting : module.getSettings()) {
-                        if (!sObj.has(setting.getKey())) {
-                            continue;
+                if (mJson.has("options") && mJson.get("options").isJsonObject()) {
+                    JsonObject opts = mJson.getAsJsonObject("options");
+                    for (Setting<?> s : mod.getSettings()) {
+                        if (opts.has(s.getId())) {
+                            readSetting(s, opts.get(s.getId()));
                         }
-                        applySettingJson(setting, sObj.get(setting.getKey()));
                     }
                 }
             }
         } catch (IOException | RuntimeException ex) {
-            ViewGridMod.LOGGER.error("Failed reading config {}, keeping safe defaults", this.configPath, ex);
+            ViewGridMod.LOGGER.error("Failed loading settings from {}, using defaults", this.filePath, ex);
         }
     }
 
     @SuppressWarnings("unchecked")
-    private void applySettingJson(Setting<?> setting, JsonElement el) {
-        switch (setting.getType()) {
-            case BOOLEAN -> {
-                if (el.isJsonPrimitive()) {
-                    ((Setting<Boolean>) setting).setValue(el.getAsBoolean());
+    private void readSetting(Setting<?> setting, JsonElement el) {
+        switch (setting.getKind()) {
+            case TOGGLE -> {
+                if (el.isJsonPrimitive()) ((Setting<Boolean>) setting).set(el.getAsBoolean());
+            }
+            case SLIDER_DOUBLE -> {
+                if (el.isJsonPrimitive() && Double.isFinite(el.getAsDouble())) {
+                    ((Setting<Double>) setting).set(el.getAsDouble());
                 }
             }
-            case DOUBLE -> {
-                if (el.isJsonPrimitive()) {
-                    double v = el.getAsDouble();
-                    if (Double.isFinite(v)) {
-                        ((Setting<Double>) setting).setValue(v);
-                    }
-                }
+            case SLIDER_INT -> {
+                if (el.isJsonPrimitive()) ((Setting<Integer>) setting).set(el.getAsInt());
             }
-            case INT -> {
+            case DROPDOWN -> {
                 if (el.isJsonPrimitive()) {
-                    ((Setting<Integer>) setting).setValue(el.getAsInt());
-                }
-            }
-            case ENUM -> {
-                if (el.isJsonPrimitive()) {
-                    Setting<Enum<?>> enumSetting = (Setting<Enum<?>>) setting;
-                    String targetName = el.getAsString();
-                    for (Enum<?> candidate : enumSetting.getEnumConstants()) {
-                        if (candidate.name().equalsIgnoreCase(targetName)) {
-                            enumSetting.setValue(candidate);
+                    Setting<Enum<?>> es = (Setting<Enum<?>>) setting;
+                    String target = el.getAsString();
+                    for (Enum<?> c : es.getChoices()) {
+                        if (c.name().equalsIgnoreCase(target)) {
+                            es.set(c);
                             break;
                         }
                     }
                 }
             }
-            case COLOR -> {
+            case COLOR_PICKER -> {
                 if (el.isJsonObject()) {
                     JsonObject co = el.getAsJsonObject();
-                    Setting<ColorRgba> colSetting = (Setting<ColorRgba>) setting;
-                    ColorRgba cur = colSetting.getValue();
-                    int r = co.has("r") ? co.get("r").getAsInt() : cur.getR();
-                    int g = co.has("g") ? co.get("g").getAsInt() : cur.getG();
-                    int b = co.has("b") ? co.get("b").getAsInt() : cur.getB();
-                    int a = co.has("a") ? co.get("a").getAsInt() : cur.getA();
-                    colSetting.setValue(new ColorRgba(r, g, b, a));
+                    Setting<ColorRgba> cs = (Setting<ColorRgba>) setting;
+                    ColorRgba cur = cs.get();
+                    cs.set(new ColorRgba(
+                        co.has("r") ? co.get("r").getAsInt() : cur.getR(),
+                        co.has("g") ? co.get("g").getAsInt() : cur.getG(),
+                        co.has("b") ? co.get("b").getAsInt() : cur.getB(),
+                        co.has("a") ? co.get("a").getAsInt() : cur.getA()
+                    ));
                 }
             }
-            case BLOCK_LIST -> {
+            case BLOCK_FILTER -> {
                 if (el.isJsonPrimitive()) {
-                    String csv = el.getAsString();
-                    List<String> cleaned = Arrays.stream(csv.split(","))
+                    List<String> items = Arrays.stream(el.getAsString().split(","))
                         .map(String::trim)
                         .filter(s -> !s.isEmpty())
                         .limit(64)
                         .toList();
-                    ((Setting<String>) setting).setValue(String.join(", ", cleaned));
+                    ((Setting<String>) setting).set(String.join(", ", items));
                 }
             }
         }
@@ -166,80 +152,77 @@ public final class ConfigManager {
 
     public void save() {
         try {
-            Files.createDirectories(this.configPath.getParent());
+            Files.createDirectories(this.filePath.getParent());
             JsonObject root = new JsonObject();
             root.addProperty("schemaVersion", SCHEMA_VERSION);
-            root.addProperty("audioFeedback", this.audioFeedback);
-            root.addProperty("compactCards", this.compactCards);
-            root.addProperty("lastCategory", this.lastCategory);
+            root.addProperty("soundFeedback", this.soundFeedback);
+            root.addProperty("compactLayout", this.compactLayout);
+            root.addProperty("selectedCategory", this.selectedCategory);
 
-            JsonObject modulesObj = new JsonObject();
-            for (Module module : this.moduleManager.getModules()) {
-                JsonObject mObj = new JsonObject();
-                mObj.addProperty("enabled", module.isEnabled());
-                mObj.addProperty("keybind", module.getKeybind());
+            JsonObject modsJson = new JsonObject();
+            for (Module mod : this.moduleManager.getAll()) {
+                JsonObject mJson = new JsonObject();
+                mJson.addProperty("enabled", mod.isEnabled());
+                mJson.addProperty("keybind", mod.getKeybind());
 
-                JsonObject sObj = new JsonObject();
-                for (Setting<?> setting : module.getSettings()) {
-                    switch (setting.getType()) {
-                        case BOOLEAN -> sObj.addProperty(setting.getKey(), (Boolean) setting.getValue());
-                        case DOUBLE -> sObj.addProperty(setting.getKey(), (Double) setting.getValue());
-                        case INT -> sObj.addProperty(setting.getKey(), (Integer) setting.getValue());
-                        case ENUM -> sObj.addProperty(setting.getKey(), ((Enum<?>) setting.getValue()).name());
-                        case BLOCK_LIST -> sObj.addProperty(setting.getKey(), (String) setting.getValue());
-                        case COLOR -> {
-                            ColorRgba c = (ColorRgba) setting.getValue();
+                JsonObject opts = new JsonObject();
+                for (Setting<?> s : mod.getSettings()) {
+                    switch (s.getKind()) {
+                        case TOGGLE -> opts.addProperty(s.getId(), (Boolean) s.get());
+                        case SLIDER_DOUBLE -> opts.addProperty(s.getId(), (Double) s.get());
+                        case SLIDER_INT -> opts.addProperty(s.getId(), (Integer) s.get());
+                        case DROPDOWN -> opts.addProperty(s.getId(), ((Enum<?>) s.get()).name());
+                        case BLOCK_FILTER -> opts.addProperty(s.getId(), (String) s.get());
+                        case COLOR_PICKER -> {
+                            ColorRgba c = (ColorRgba) s.get();
                             JsonObject co = new JsonObject();
                             co.addProperty("r", c.getR());
                             co.addProperty("g", c.getG());
                             co.addProperty("b", c.getB());
                             co.addProperty("a", c.getA());
-                            sObj.add(setting.getKey(), co);
+                            opts.add(s.getId(), co);
                         }
                     }
                 }
-                mObj.add("settings", sObj);
-                modulesObj.add(module.getId(), mObj);
+                mJson.add("options", opts);
+                modsJson.add(mod.getId(), mJson);
             }
-            root.add("modules", modulesObj);
+            root.add("modules", modsJson);
 
-            Path tmp = this.configPath.resolveSibling("config.json.tmp");
+            Path staged = this.filePath.resolveSibling("settings.json.tmp");
             Files.writeString(
-                tmp,
+                staged,
                 GSON.toJson(root),
                 StandardCharsets.UTF_8,
                 StandardOpenOption.CREATE,
                 StandardOpenOption.TRUNCATE_EXISTING
             );
-            Files.move(tmp, this.configPath, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            Files.move(staged, this.filePath, StandardCopyOption.REPLACE_EXISTING);
         } catch (IOException ex) {
-            ViewGridMod.LOGGER.error("Failed writing config {}", this.configPath, ex);
+            ViewGridMod.LOGGER.error("Failed saving settings to {}", this.filePath, ex);
         }
     }
 
-    public boolean isAudioFeedback() { return audioFeedback; }
-    public void setAudioFeedback(boolean audioFeedback) { this.audioFeedback = audioFeedback; }
+    public boolean isSoundFeedback() { return soundFeedback; }
+    public void setSoundFeedback(boolean soundFeedback) { this.soundFeedback = soundFeedback; }
 
-    public boolean isCompactCards() { return compactCards; }
-    public void setCompactCards(boolean compactCards) { this.compactCards = compactCards; }
+    public boolean isCompactLayout() { return compactLayout; }
+    public void setCompactLayout(boolean compactLayout) { this.compactLayout = compactLayout; }
 
-    public String getLastCategory() { return lastCategory; }
-    public void setLastCategory(String lastCategory) { this.lastCategory = lastCategory; }
+    public String getSelectedCategory() { return selectedCategory; }
+    public void setSelectedCategory(String selectedCategory) { this.selectedCategory = selectedCategory; }
 
-    public static Set<String> parseBlockFilterSet(String csv) {
-        Set<String> out = new HashSet<>();
+    public static Set<String> normalizeBlockIds(String csv) {
+        Set<String> set = new HashSet<>();
         if (csv == null || csv.isBlank()) {
-            return out;
+            return set;
         }
-        for (String part : csv.split(",")) {
-            String normalized = part.trim().toLowerCase();
-            if (!normalized.isEmpty()) {
-                if (!normalized.contains(":")) {
-                    normalized = "minecraft:" + normalized;
-                }
-                out.add(normalized);
+        for (String token : csv.split(",")) {
+            String norm = token.trim().toLowerCase(Locale.ROOT);
+            if (!norm.isEmpty()) {
+                set.add(norm.contains(":") ? norm : "minecraft:" + norm);
             }
         }
-        return out;
+        return set;
     }
 }

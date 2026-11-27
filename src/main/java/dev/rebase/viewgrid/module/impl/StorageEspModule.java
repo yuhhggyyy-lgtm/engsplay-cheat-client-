@@ -24,135 +24,113 @@ import java.util.Collections;
 import java.util.List;
 
 public final class StorageEspModule extends Module {
-    public enum RenderStyle {
-        OUTLINE,
-        BOX,
-        BOTH
-    }
+    public enum Style { OUTLINE, BOX, BOTH }
+    public record Entry(BlockPos pos, String label, ColorRgba color, double distance) {}
 
-    public record TargetEntry(BlockPos pos, String label, ColorRgba color, double distance) {}
-
-    private final Setting<RenderStyle> renderStyle = registerSetting(
-        Setting.choice("render_style", "Render Style", RenderStyle.BOTH, RenderStyle.class)
+    private final Setting<Style> style = addSetting(
+        Setting.dropdown("style", "Render Mode", Style.BOTH, Style.class)
     );
-    private final Setting<Boolean> perTypeColors = registerSetting(
-        Setting.bool("per_type_colors", "Per-Type Colors", true)
+    private final Setting<Boolean> perType = addSetting(
+        Setting.toggle("per_type", "Per-Type Colors", true)
     );
-    private final Setting<ColorRgba> globalColor = registerSetting(
-        Setting.color("global_color", "Global Color", new ColorRgba(255, 196, 48, 210))
+    private final Setting<ColorRgba> sharedColor = addSetting(
+        Setting.colorPicker("shared_color", "Global Color", new ColorRgba(250, 190, 45, 210))
     );
-    private final Setting<ColorRgba> chestColor = registerSetting(
-        Setting.color("chest_color", "Chest / Barrel Color", new ColorRgba(245, 175, 40, 210))
+    private final Setting<ColorRgba> chestTint = addSetting(
+        Setting.colorPicker("chest_tint", "Chest / Barrel", new ColorRgba(240, 165, 35, 210))
     );
-    private final Setting<ColorRgba> shulkerColor = registerSetting(
-        Setting.color("shulker_color", "Shulker Color", new ColorRgba(210, 75, 255, 220))
+    private final Setting<ColorRgba> shulkerTint = addSetting(
+        Setting.colorPicker("shulker_tint", "Shulker Box", new ColorRgba(205, 80, 255, 215))
     );
-    private final Setting<ColorRgba> enderColor = registerSetting(
-        Setting.color("ender_color", "Ender Chest Color", new ColorRgba(45, 220, 210, 210))
+    private final Setting<ColorRgba> enderTint = addSetting(
+        Setting.colorPicker("ender_tint", "Ender Chest", new ColorRgba(40, 220, 205, 210))
     );
-    private final Setting<ColorRgba> utilityColor = registerSetting(
-        Setting.color("utility_color", "Hopper / Disp / Drop Color", new ColorRgba(120, 175, 255, 200))
+    private final Setting<ColorRgba> mechTint = addSetting(
+        Setting.colorPicker("mech_tint", "Hopper / Disp / Drop", new ColorRgba(110, 175, 255, 200))
     );
-    private final Setting<Boolean> tracers = registerSetting(
-        Setting.bool("tracers", "Tracers", false)
+    private final Setting<Boolean> tracers = addSetting(
+        Setting.toggle("tracers", "Tracers", false)
     );
-    private final Setting<Boolean> showLabels = registerSetting(
-        Setting.bool("show_labels", "Count & Type Labels", true)
+    private final Setting<Boolean> labels = addSetting(
+        Setting.toggle("labels", "Labels & Count", true)
     );
-    private final Setting<Integer> maxDistance = registerSetting(
-        Setting.rangedInt("max_distance", "Max Distance", 96, 8, 256)
+    private final Setting<Integer> range = addSetting(
+        Setting.sliderInt("range", "Max Distance", 96, 8, 256)
     );
 
-    private volatile List<TargetEntry> snapshot = Collections.emptyList();
+    private volatile List<Entry> entries = Collections.emptyList();
 
     public StorageEspModule() {
         super(
             "storage_esp",
             "Storage ESP",
-            "Highlights chests, barrels, shulkers, hoppers, and dispensers within range.",
+            "Highlights containers and hoppers/dispensers/droppers in range.",
             Category.VISUALS
         );
     }
 
     @Override
-    protected void onDisable() {
-        this.snapshot = Collections.emptyList();
+    protected void onDeactivate() {
+        this.entries = Collections.emptyList();
     }
 
     @Override
-    public void onTick(Minecraft client) {
-        if (client.level == null || client.player == null) {
-            this.snapshot = Collections.emptyList();
+    public void onTick(Minecraft mc) {
+        if (mc.level == null || mc.player == null) {
+            this.entries = Collections.emptyList();
             return;
         }
-        Level level = client.level;
-        Vec3 eyePos = client.player.getEyePosition(1.0f);
-        double maxDistSq = (double) this.maxDistance.getValue() * this.maxDistance.getValue();
+        Level level = mc.level;
+        Vec3 eye = mc.player.getEyePosition(1.0f);
+        double maxDistSq = (double) this.range.get() * this.range.get();
 
-        // UNVERIFIED: ClientLevel block entity iteration helper in 1.21.11 official Mojang mappings.
-        // Inspect net.minecraft.client.multiplayer.ClientLevel to confirm loaded block entity map access.
-        List<BlockEntity> loadedEntities = collectLoadedBlockEntities(level);
-        List<TargetEntry> next = new ArrayList<>();
+        // UNVERIFIED: Loaded block-entity accessor on ClientLevel in 1.21.11 official Mojang mappings.
+        List<BlockEntity> blockEntities = queryLoadedBlockEntities(level);
+        List<Entry> next = new ArrayList<>();
 
-        for (BlockEntity be : loadedEntities) {
-            if (be == null || be.isRemoved()) {
-                continue;
-            }
+        for (BlockEntity be : blockEntities) {
+            if (be == null || be.isRemoved()) continue;
             BlockPos pos = be.getBlockPos();
-            double distSq = pos.distToCenterSqr(eyePos.x, eyePos.y, eyePos.z);
-            if (distSq > maxDistSq) {
-                continue;
-            }
+            double dSq = pos.distToCenterSqr(eye.x, eye.y, eye.z);
+            if (dSq > maxDistSq) continue;
             BlockState state = level.getBlockState(pos);
-            String label = classifyContainer(state);
-            if (label == null) {
-                continue;
-            }
-            ColorRgba color = resolveColor(state);
-            next.add(new TargetEntry(pos, label, color, Math.sqrt(distSq)));
+            String kind = identifyStorage(state);
+            if (kind == null) continue;
+            next.add(new Entry(pos, kind, pickColor(state), Math.sqrt(dSq)));
         }
 
-        this.snapshot = Collections.unmodifiableList(next);
+        this.entries = Collections.unmodifiableList(next);
     }
 
-    private String classifyContainer(BlockState state) {
-        if (state.getBlock() instanceof TrappedChestBlock) return "Trapped Chest";
-        if (state.getBlock() instanceof ChestBlock) return "Chest";
-        if (state.getBlock() instanceof EnderChestBlock) return "Ender Chest";
-        if (state.getBlock() instanceof BarrelBlock) return "Barrel";
-        if (state.getBlock() instanceof ShulkerBoxBlock) return "Shulker Box";
-        if (state.getBlock() instanceof HopperBlock) return "Hopper";
-        if (state.getBlock() instanceof DispenserBlock) return "Dispenser";
-        if (state.getBlock() instanceof DropperBlock) return "Dropper";
+    private String identifyStorage(BlockState st) {
+        if (st.getBlock() instanceof TrappedChestBlock) return "Trapped Chest";
+        if (st.getBlock() instanceof ChestBlock) return "Chest";
+        if (st.getBlock() instanceof EnderChestBlock) return "Ender Chest";
+        if (st.getBlock() instanceof BarrelBlock) return "Barrel";
+        if (st.getBlock() instanceof ShulkerBoxBlock) return "Shulker Box";
+        if (st.getBlock() instanceof HopperBlock) return "Hopper";
+        if (st.getBlock() instanceof DispenserBlock) return "Dispenser";
+        if (st.getBlock() instanceof DropperBlock) return "Dropper";
         return null;
     }
 
-    private ColorRgba resolveColor(BlockState state) {
-        if (!Boolean.TRUE.equals(this.perTypeColors.getValue())) {
-            return this.globalColor.getValue().copy();
+    private ColorRgba pickColor(BlockState st) {
+        if (!Boolean.TRUE.equals(this.perType.get())) return this.sharedColor.get().copy();
+        if (st.getBlock() instanceof ShulkerBoxBlock) return this.shulkerTint.get().copy();
+        if (st.getBlock() instanceof EnderChestBlock) return this.enderTint.get().copy();
+        if (st.getBlock() instanceof HopperBlock || st.getBlock() instanceof DispenserBlock || st.getBlock() instanceof DropperBlock) {
+            return this.mechTint.get().copy();
         }
-        if (state.getBlock() instanceof ShulkerBoxBlock) {
-            return this.shulkerColor.getValue().copy();
-        }
-        if (state.getBlock() instanceof EnderChestBlock) {
-            return this.enderColor.getValue().copy();
-        }
-        if (state.getBlock() instanceof HopperBlock
-            || state.getBlock() instanceof DispenserBlock
-            || state.getBlock() instanceof DropperBlock) {
-            return this.utilityColor.getValue().copy();
-        }
-        return this.chestColor.getValue().copy();
+        return this.chestTint.get().copy();
     }
 
-    private List<BlockEntity> collectLoadedBlockEntities(Level level) {
-        // UNVERIFIED: Direct access to loaded block entity tickers/entries in 1.21.11.
-        // Replace with verified ClientLevel block entity collection after inspecting ClientLevel in decompiled jar.
+    private List<BlockEntity> queryLoadedBlockEntities(Level level) {
+        // UNVERIFIED: Confirm loaded block-entity list/map on ClientLevel in 1.21.11 decompiled jar.
         return Collections.emptyList();
     }
 
-    public List<TargetEntry> getSnapshot() { return snapshot; }
-    public RenderStyle getRenderStyle() { return renderStyle.getValue(); }
-    public boolean isTracersEnabled() { return Boolean.TRUE.equals(tracers.getValue()); }
-    public boolean isLabelsEnabled() { return Boolean.TRUE.equals(showLabels.getValue()); }
+    public List<Entry> getEntries() { return entries; }
+    public Style getStyle() { return style.get(); }
+    public boolean hasTracers() { return Boolean.TRUE.equals(tracers.get()); }
+    public boolean hasLabels() { return Boolean.TRUE.equals(labels.get()); }
 }

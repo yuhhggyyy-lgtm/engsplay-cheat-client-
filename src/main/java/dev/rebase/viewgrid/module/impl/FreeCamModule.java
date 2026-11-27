@@ -4,119 +4,111 @@ import dev.rebase.viewgrid.module.Category;
 import dev.rebase.viewgrid.module.Module;
 import dev.rebase.viewgrid.module.Setting;
 import net.minecraft.client.Minecraft;
+import net.minecraft.core.BlockPos;
+import net.minecraft.util.Mth;
 import net.minecraft.world.phys.Vec3;
 
 public final class FreeCamModule extends Module {
-    private final Setting<Double> horizontalSpeed = registerSetting(
-        Setting.rangedDouble("horizontal_speed", "Move Speed", 1.1, 0.1, 5.0)
+    private final Setting<Double> moveSpeed = addSetting(
+        Setting.sliderDouble("move_speed", "Horizontal Speed", 1.1, 0.1, 5.0)
     );
-    private final Setting<Double> verticalSpeed = registerSetting(
-        Setting.rangedDouble("vertical_speed", "Vertical Speed", 0.75, 0.1, 4.0)
+    private final Setting<Double> climbSpeed = addSetting(
+        Setting.sliderDouble("climb_speed", "Vertical Speed", 0.75, 0.1, 4.0)
     );
-    private final Setting<Boolean> noclipCamera = registerSetting(
-        Setting.bool("noclip_camera", "Noclip Camera", true)
+    private final Setting<Boolean> noclip = addSetting(
+        Setting.toggle("noclip", "Noclip Camera", true)
     );
 
-    private Vec3 camPos = Vec3.ZERO;
-    private float camYaw = 0.0f;
-    private float camPitch = 0.0f;
-    private boolean initialized = false;
+    private Vec3 pos = Vec3.ZERO;
+    private float yaw = 0.0f;
+    private float pitch = 0.0f;
+    private boolean ready = false;
 
     public FreeCamModule() {
         super(
             "free_cam",
             "Free Cam",
-            "Detaches a free-moving client camera without moving the player or sending movement packets.",
+            "Moves a detached client camera without moving the player or sending movement packets.",
             Category.CAMERA
         );
     }
 
     @Override
-    protected void onEnable() {
+    protected void onActivate() {
         Minecraft mc = Minecraft.getInstance();
         if (mc.player != null) {
-            this.camPos = mc.player.getEyePosition(1.0f);
-            this.camYaw = mc.player.getYRot();
-            this.camPitch = mc.player.getXRot();
-            this.initialized = true;
+            this.pos = mc.player.getEyePosition(1.0f);
+            this.yaw = mc.player.getYRot();
+            this.pitch = mc.player.getXRot();
+            this.ready = true;
         }
     }
 
     @Override
-    protected void onDisable() {
-        this.initialized = false;
+    protected void onDeactivate() {
+        this.ready = false;
     }
 
     @Override
-    public void onTick(Minecraft client) {
-        if (client.player == null || client.level == null) {
+    public void onTick(Minecraft mc) {
+        if (mc.player == null || mc.level == null) {
             setEnabled(false);
             return;
         }
-        if (!this.initialized) {
-            onEnable();
+        if (!this.ready) {
+            onActivate();
             return;
         }
-        if (client.screen != null) {
-            return;
+        if (mc.screen != null) return;
+
+        double fwd = 0.0;
+        double right = 0.0;
+        double vert = 0.0;
+
+        if (mc.options.keyUp.isDown()) fwd += 1.0;
+        if (mc.options.keyDown.isDown()) fwd -= 1.0;
+        if (mc.options.keyRight.isDown()) right += 1.0;
+        if (mc.options.keyLeft.isDown()) right -= 1.0;
+        if (mc.options.keyJump.isDown()) vert += 1.0;
+        if (mc.options.keyShift.isDown()) vert -= 1.0;
+
+        double hSpd = this.moveSpeed.get();
+        double vSpd = this.climbSpeed.get();
+        if (mc.options.keySprint.isDown()) {
+            hSpd *= 1.8;
+            vSpd *= 1.6;
         }
 
-        double forwardInput = 0.0;
-        double strafeInput = 0.0;
-        double verticalInput = 0.0;
+        double rad = Math.toRadians(this.yaw);
+        double fx = -Math.sin(rad);
+        double fz = Math.cos(rad);
+        double rx = Math.cos(rad);
+        double rz = Math.sin(rad);
 
-        if (client.options.keyUp.isDown()) forwardInput += 1.0;
-        if (client.options.keyDown.isDown()) forwardInput -= 1.0;
-        if (client.options.keyRight.isDown()) strafeInput += 1.0;
-        if (client.options.keyLeft.isDown()) strafeInput -= 1.0;
-        if (client.options.keyJump.isDown()) verticalInput += 1.0;
-        if (client.options.keyShift.isDown()) verticalInput -= 1.0;
+        Vec3 candidate = this.pos.add(
+            (fx * fwd + rx * right) * hSpd,
+            vert * vSpd,
+            (fz * fwd + rz * right) * hSpd
+        );
 
-        double hSpeed = this.horizontalSpeed.getValue();
-        double vSpeed = this.verticalSpeed.getValue();
-        if (client.options.keySprint.isDown()) {
-            hSpeed *= 1.8;
-            vSpeed *= 1.6;
+        if (!Boolean.TRUE.equals(this.noclip.get())) {
+            BlockPos bp = BlockPos.containing(candidate.x, candidate.y, candidate.z);
+            var st = mc.level.getBlockState(bp);
+            if (!st.isAir() && st.blocksMotion()) {
+                return;
+            }
         }
-
-        double radYaw = Math.toRadians(this.camYaw);
-        double lookX = -Math.sin(radYaw);
-        double lookZ = Math.cos(radYaw);
-        double rightX = Math.cos(radYaw);
-        double rightZ = Math.sin(radYaw);
-
-        double dx = (lookX * forwardInput + rightX * strafeInput) * hSpeed;
-        double dz = (lookZ * forwardInput + rightZ * strafeInput) * hSpeed;
-        double dy = verticalInput * vSpeed;
-
-        Vec3 next = this.camPos.add(dx, dy, dz);
-        if (!Boolean.TRUE.equals(this.noclipCamera.getValue())) {
-            next = clampToNonSolid(client, this.camPos, next);
-        }
-        this.camPos = next;
+        this.pos = candidate;
     }
 
-    private Vec3 clampToNonSolid(Minecraft client, Vec3 current, Vec3 desired) {
-        if (client.level == null) return current;
-        net.minecraft.core.BlockPos targetBlock = net.minecraft.core.BlockPos.containing(desired.x, desired.y, desired.z);
-        var state = client.level.getBlockState(targetBlock);
-        if (state.isAir() || !state.blocksMotion()) {
-            return desired;
-        }
-        return current;
+    public void turn(double dyaw, double dpitch) {
+        if (!isEnabled() || !this.ready) return;
+        this.yaw += (float) dyaw;
+        this.pitch = Mth.clamp(this.pitch + (float) dpitch, -90.0f, 90.0f);
     }
 
-    public void adjustLook(double deltaYaw, double deltaPitch) {
-        if (!isEnabled() || !this.initialized) return;
-        this.camYaw += (float) deltaYaw;
-        this.camPitch = net.minecraft.util.Mth.clamp(this.camPitch + (float) deltaPitch, -90.0f, 90.0f);
-    }
-
-    public boolean isControllingCamera() {
-        return isEnabled() && this.initialized;
-    }
-
-    public Vec3 getCamPos() { return camPos; }
-    public float getCamYaw() { return camYaw; }
-    public float getCamPitch() { return camPitch; }
+    public boolean isReady() { return isEnabled() && this.ready; }
+    public Vec3 getPos() { return pos; }
+    public float getYaw() { return yaw; }
+    public float getPitch() { return pitch; }
 }

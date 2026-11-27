@@ -7,83 +7,69 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.util.Mth;
 
 public final class FreeLookModule extends Module {
-    private final Setting<Double> yawLimitDeg = registerSetting(
-        Setting.rangedDouble("yaw_limit_deg", "Max Yaw Offset (deg)", 140.0, 30.0, 180.0)
+    private final Setting<Double> maxYaw = addSetting(
+        Setting.sliderDouble("max_yaw", "Yaw Clamp (deg)", 140.0, 30.0, 180.0)
     );
-    private final Setting<Double> pitchLimitDeg = registerSetting(
-        Setting.rangedDouble("pitch_limit_deg", "Max Pitch Clamp (deg)", 89.0, 20.0, 90.0)
+    private final Setting<Double> maxPitch = addSetting(
+        Setting.sliderDouble("max_pitch", "Pitch Clamp (deg)", 89.0, 20.0, 90.0)
     );
-    private final Setting<Double> smoothing = registerSetting(
-        Setting.rangedDouble("smoothing", "Camera Smoothing", 0.35, 0.0, 0.9)
+    private final Setting<Double> smooth = addSetting(
+        Setting.sliderDouble("smooth", "Smooth Factor", 0.35, 0.0, 0.9)
     );
 
-    private boolean active = false;
-    private float anchorYaw = 0.0f;
-    private float anchorPitch = 0.0f;
-    private float cameraYaw = 0.0f;
-    private float cameraPitch = 0.0f;
+    private boolean engaged = false;
+    private float yaw = 0.0f;
+    private float pitch = 0.0f;
 
     public FreeLookModule() {
         super(
             "free_look",
             "Free Look",
-            "Decouples camera look direction from player movement orientation while enabled.",
+            "Decouples camera orientation from player look/movement direction while active.",
             Category.CAMERA
         );
     }
 
     @Override
-    protected void onEnable() {
+    protected void onActivate() {
         Minecraft mc = Minecraft.getInstance();
         if (mc.player != null) {
-            this.anchorYaw = mc.player.getYRot();
-            this.anchorPitch = mc.player.getXRot();
-            this.cameraYaw = this.anchorYaw;
-            this.cameraPitch = this.anchorPitch;
-            this.active = true;
+            this.yaw = mc.player.getYRot();
+            this.pitch = mc.player.getXRot();
+            this.engaged = true;
         }
     }
 
     @Override
-    protected void onDisable() {
-        this.active = false;
+    protected void onDeactivate() {
+        this.engaged = false;
     }
 
     @Override
-    public void onTick(Minecraft client) {
-        if (client.player == null) {
+    public void onTick(Minecraft mc) {
+        if (mc.player == null) {
             setEnabled(false);
             return;
         }
-        if (!this.active) {
-            onEnable();
-        }
+        if (!this.engaged) onActivate();
     }
 
-    public boolean interceptLookDelta(double deltaYaw, double deltaPitch, float baseYaw, float basePitch) {
-        if (!isEnabled() || !this.active) {
-            return false;
-        }
-        float maxYaw = this.yawLimitDeg.getValue().floatValue();
-        float maxPitch = this.pitchLimitDeg.getValue().floatValue();
-        float alpha = 1.0f - this.smoothing.getValue().floatValue();
+    public boolean stepLook(double dyaw, double dpitch, float anchorYaw) {
+        if (!isEnabled() || !this.engaged) return false;
+        float yawLim = this.maxYaw.get().floatValue();
+        float pitchLim = this.maxPitch.get().floatValue();
+        float alpha = 1.0f - this.smooth.get().floatValue();
 
-        float targetYaw = this.cameraYaw + (float) deltaYaw;
-        float deltaFromAnchor = Mth.wrapDegrees(targetYaw - baseYaw);
-        deltaFromAnchor = Mth.clamp(deltaFromAnchor, -maxYaw, maxYaw);
-        float clampedTargetYaw = baseYaw + deltaFromAnchor;
+        float rawYaw = this.yaw + (float) dyaw;
+        float relYaw = Mth.clamp(Mth.wrapDegrees(rawYaw - anchorYaw), -yawLim, yawLim);
+        float nextPitch = Mth.clamp(this.pitch + (float) dpitch, -pitchLim, pitchLim);
 
-        float targetPitch = Mth.clamp(this.cameraPitch + (float) deltaPitch, -maxPitch, maxPitch);
-
-        this.cameraYaw = Mth.lerp(alpha, this.cameraYaw, clampedTargetYaw);
-        this.cameraPitch = Mth.lerp(alpha, this.cameraPitch, targetPitch);
+        this.yaw = Mth.lerp(alpha, this.yaw, anchorYaw + relYaw);
+        this.pitch = Mth.lerp(alpha, this.pitch, nextPitch);
         return true;
     }
 
-    public boolean isOverridingCamera() {
-        return isEnabled() && this.active;
-    }
-
-    public float getCameraYaw() { return cameraYaw; }
-    public float getCameraPitch() { return cameraPitch; }
+    public boolean isEngaged() { return isEnabled() && this.engaged; }
+    public float getYaw() { return yaw; }
+    public float getPitch() { return pitch; }
 }

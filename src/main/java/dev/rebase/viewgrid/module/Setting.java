@@ -3,114 +3,101 @@ package dev.rebase.viewgrid.module;
 import dev.rebase.viewgrid.config.ColorRgba;
 
 public final class Setting<T> {
-    public enum Type {
-        BOOLEAN,
-        DOUBLE,
-        INT,
-        ENUM,
-        COLOR,
-        BLOCK_LIST
+    public enum Kind {
+        TOGGLE,
+        SLIDER_DOUBLE,
+        SLIDER_INT,
+        DROPDOWN,
+        COLOR_PICKER,
+        BLOCK_FILTER
     }
 
-    private final String key;
+    private final String id;
     private final String label;
-    private final Type type;
-    private T value;
-    private final T defaultValue;
-    private final double minDouble;
-    private final double maxDouble;
-    private final int minInt;
-    private final int maxInt;
-    private final Enum<?>[] enumConstants;
+    private final Kind kind;
+    private T current;
+    private final double minD;
+    private final double maxD;
+    private final int minI;
+    private final int maxI;
+    private final Enum<?>[] choices;
 
     private Setting(
-        String key,
+        String id,
         String label,
-        Type type,
-        T defaultValue,
-        double minDouble,
-        double maxDouble,
-        int minInt,
-        int maxInt,
-        Enum<?>[] enumConstants
+        Kind kind,
+        T initial,
+        double minD,
+        double maxD,
+        int minI,
+        int maxI,
+        Enum<?>[] choices
     ) {
-        this.key = key;
+        this.id = id;
         this.label = label;
-        this.type = type;
-        this.defaultValue = defaultValue;
-        this.value = copyValue(defaultValue);
-        this.minDouble = minDouble;
-        this.maxDouble = maxDouble;
-        this.minInt = minInt;
-        this.maxInt = maxInt;
-        this.enumConstants = enumConstants;
+        this.kind = kind;
+        this.current = initial instanceof ColorRgba c ? (T) c.copy() : initial;
+        this.minD = minD;
+        this.maxD = maxD;
+        this.minI = minI;
+        this.maxI = maxI;
+        this.choices = choices;
     }
+
+    public static Setting<Boolean> toggle(String id, String label, boolean def) {
+        return new Setting<>(id, label, Kind.TOGGLE, def, 0, 1, 0, 1, null);
+    }
+
+    public static Setting<Double> sliderDouble(String id, String label, double def, double min, double max) {
+        return new Setting<>(id, label, Kind.SLIDER_DOUBLE, def, min, max, 0, 0, null);
+    }
+
+    public static Setting<Integer> sliderInt(String id, String label, int def, int min, int max) {
+        return new Setting<>(id, label, Kind.SLIDER_INT, def, 0, 0, min, max, null);
+    }
+
+    public static <E extends Enum<E>> Setting<E> dropdown(String id, String label, E def, Class<E> enumType) {
+        return new Setting<>(id, label, Kind.DROPDOWN, def, 0, 0, 0, 0, enumType.getEnumConstants());
+    }
+
+    public static Setting<ColorRgba> colorPicker(String id, String label, ColorRgba def) {
+        return new Setting<>(id, label, Kind.COLOR_PICKER, def, 0, 0, 0, 0, null);
+    }
+
+    public static Setting<String> blockFilter(String id, String label, String defCsv) {
+        return new Setting<>(id, label, Kind.BLOCK_FILTER, defCsv, 0, 0, 0, 0, null);
+    }
+
+    public String getId() { return id; }
+    public String getLabel() { return label; }
+    public Kind getKind() { return kind; }
+    public T get() { return current; }
+    public double getMinD() { return minD; }
+    public double getMaxD() { return maxD; }
+    public int getMinI() { return minI; }
+    public int getMaxI() { return maxI; }
+    public Enum<?>[] getChoices() { return choices; }
 
     @SuppressWarnings("unchecked")
-    private T copyValue(T v) {
-        if (v instanceof ColorRgba c) {
-            return (T) c.copy();
-        }
-        return v;
-    }
-
-    public static Setting<Boolean> bool(String key, String label, boolean def) {
-        return new Setting<>(key, label, Type.BOOLEAN, def, 0, 1, 0, 1, null);
-    }
-
-    public static Setting<Double> rangedDouble(String key, String label, double def, double min, double max) {
-        return new Setting<>(key, label, Type.DOUBLE, def, min, max, 0, 0, null);
-    }
-
-    public static Setting<Integer> rangedInt(String key, String label, int def, int min, int max) {
-        return new Setting<>(key, label, Type.INT, def, 0, 0, min, max, null);
-    }
-
-    public static <E extends Enum<E>> Setting<E> choice(String key, String label, E def, Class<E> enumClass) {
-        return new Setting<>(key, label, Type.ENUM, def, 0, 0, 0, 0, enumClass.getEnumConstants());
-    }
-
-    public static Setting<ColorRgba> color(String key, String label, ColorRgba def) {
-        return new Setting<>(key, label, Type.COLOR, def, 0, 0, 0, 0, null);
-    }
-
-    public static Setting<String> blockList(String key, String label, String defCsv) {
-        return new Setting<>(key, label, Type.BLOCK_LIST, defCsv, 0, 0, 0, 0, null);
-    }
-
-    public String getKey() { return key; }
-    public String getLabel() { return label; }
-    public Type getType() { return type; }
-    public T getValue() { return value; }
-    public T getDefaultValue() { return defaultValue; }
-    public double getMinDouble() { return minDouble; }
-    public double getMaxDouble() { return maxDouble; }
-    public int getMinInt() { return minInt; }
-    public int getMaxInt() { return maxInt; }
-    public Enum<?>[] getEnumConstants() { return enumConstants; }
-
-    public void setValue(T newValue) {
-        if (newValue == null) {
-            return;
-        }
-        switch (this.type) {
-            case DOUBLE -> {
-                double d = ((Number) newValue).doubleValue();
-                if (!Double.isFinite(d)) return;
-                d = Math.max(this.minDouble, Math.min(this.maxDouble, d));
-                this.value = (T) Double.valueOf(d);
-            }
-            case INT -> {
-                int i = ((Number) newValue).intValue();
-                i = Math.max(this.minInt, Math.min(this.maxInt, i));
-                this.value = (T) Integer.valueOf(i);
-            }
-            case COLOR -> {
-                if (newValue instanceof ColorRgba c) {
-                    this.value = (T) c.copy();
+    public void set(T value) {
+        if (value == null) return;
+        switch (this.kind) {
+            case SLIDER_DOUBLE -> {
+                double d = ((Number) value).doubleValue();
+                if (Double.isFinite(d)) {
+                    this.current = (T) Double.valueOf(Math.max(this.minD, Math.min(this.maxD, d)));
                 }
             }
-            default -> this.value = newValue;
+            case SLIDER_INT -> {
+                int i = ((Number) value).intValue();
+                this.current = (T) Integer.valueOf(Math.max(this.minI, Math.min(this.maxI, i)));
+            }
+            case COLOR_PICKER -> {
+                if (value instanceof ColorRgba c) {
+                    this.current = (T) c.copy();
+                }
+            }
+            default -> this.current = value;
         }
     }
 }

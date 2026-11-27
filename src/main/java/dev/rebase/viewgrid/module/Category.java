@@ -5,13 +5,13 @@ public enum Category {
     WORLD("World"),
     CAMERA("Camera");
 
-    private final String label;
+    private final String title;
 
-    Category(String label) {
-        this.label = label;
+    Category(String title) {
+        this.title = title;
     }
 
-    public String getLabel() {
-        return label;
+    public String getTitle() {
+        return title;
     }
 }

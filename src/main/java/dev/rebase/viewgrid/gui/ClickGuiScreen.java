@@ -16,313 +16,274 @@ import org.lwjgl.glfw.GLFW;
 import java.util.List;
 
 public final class ClickGuiScreen extends Screen {
-    private static final int COL_BACKDROP = 0x99080B12;
-    private static final int COL_SIDEBAR = 0xE60E1420;
-    private static final int COL_PANEL = 0xCC121927;
-    private static final int COL_CARD = 0xE6182234;
-    private static final int COL_CARD_ACTIVE = 0xE61D2B42;
-    private static final int COL_BORDER = 0x44526B94;
-    private static final int COL_ACCENT = 0xFF38BDF8;
-    private static final int COL_TEXT_PRIMARY = 0xFFF1F5F9;
-    private static final int COL_TEXT_MUTED = 0xFF94A3B8;
+    private static final int BACKDROP = 0x99070A10;
+    private static final int SIDEBAR_BG = 0xE60C121D;
+    private static final int PANEL_BG = 0xCC111826;
+    private static final int CARD_BG = 0xE6172133;
+    private static final int CARD_ACTIVE_BG = 0xE61C2A40;
+    private static final int BORDER_COL = 0x44526B94;
+    private static final int ACCENT_COL = 0xFF38BDF8;
+    private static final int TEXT_HI = 0xFFF1F5F9;
+    private static final int TEXT_LO = 0xFF94A3B8;
 
     private final ModuleManager moduleManager;
     private final ConfigManager configManager;
 
-    private Category activeCategory;
-    private Module expandedModule = null;
-    private EditBox searchBox;
-    private EditBox hexInputBox;
-    private Setting<ColorRgba> activeColorSetting = null;
-    private Module listeningKeybindModule = null;
+    private Category currentCategory;
+    private Module openDrawerModule = null;
+    private Module bindingModule = null;
+    private EditBox searchField;
 
-    private int sidebarX, sidebarY, sidebarW, sidebarH;
-    private int panelX, panelY, panelW, panelH;
-    private int barX, barY, barW, barH;
+    private int railX, railY, railW, railH;
+    private int bodyX, bodyY, bodyW, bodyH;
+    private int dockX, dockY, dockW, dockH;
 
     public ClickGuiScreen(ModuleManager moduleManager, ConfigManager configManager) {
-        super(Component.literal("ViewGrid GUI"));
+        super(Component.literal("ViewGrid"));
         this.moduleManager = moduleManager;
         this.configManager = configManager;
-        this.activeCategory = parseCategory(configManager.getLastCategory());
+        this.currentCategory = resolveCategory(configManager.getSelectedCategory());
     }
 
-    private Category parseCategory(String name) {
-        if (name == null) return Category.VISUALS;
+    private Category resolveCategory(String raw) {
+        if (raw == null) return Category.VISUALS;
         for (Category c : Category.values()) {
-            if (c.name().equalsIgnoreCase(name)) return c;
+            if (c.name().equalsIgnoreCase(raw)) return c;
         }
         return Category.VISUALS;
     }
 
     @Override
     protected void init() {
-        int margin = 18;
-        int bottomBarHeight = 36;
-        int totalH = Math.max(220, this.height - margin * 2 - bottomBarHeight - 10);
-        int totalW = Math.max(460, this.width - margin * 2);
+        int pad = 18;
+        int dockHeight = 36;
+        int usableH = Math.max(220, this.height - pad * 2 - dockHeight - 10);
+        int usableW = Math.max(460, this.width - pad * 2);
 
-        this.sidebarW = Math.min(188, Math.max(145, totalW / 4));
-        this.sidebarX = margin;
-        this.sidebarY = margin;
-        this.sidebarH = totalH;
+        this.railW = Math.min(188, Math.max(145, usableW / 4));
+        this.railX = pad;
+        this.railY = pad;
+        this.railH = usableH;
 
-        this.panelX = this.sidebarX + this.sidebarW + 12;
-        this.panelY = margin;
-        this.panelW = Math.max(220, totalW - this.sidebarW - 12);
-        this.panelH = totalH;
+        this.bodyX = this.railX + this.railW + 12;
+        this.bodyY = pad;
+        this.bodyW = Math.max(220, usableW - this.railW - 12);
+        this.bodyH = usableH;
 
-        this.barW = Math.min(540, totalW);
-        this.barH = bottomBarHeight;
-        this.barX = (this.width - this.barW) / 2;
-        this.barY = this.panelY + this.panelH + 10;
+        this.dockW = Math.min(540, usableW);
+        this.dockH = dockHeight;
+        this.dockX = (this.width - this.dockW) / 2;
+        this.dockY = this.bodyY + this.bodyH + 10;
 
-        int searchW = Math.max(150, this.barW - 118);
-        this.searchBox = new EditBox(this.font, this.barX + 10, this.barY + 8, searchW, 20, Component.literal("Search modules..."));
-        this.searchBox.setHint(Component.literal("Search modules..."));
-        this.searchBox.setMaxLength(64);
-        addRenderableWidget(this.searchBox);
-
-        this.hexInputBox = new EditBox(this.font, 0, 0, 96, 16, Component.literal("#RRGGBBAA"));
-        this.hexInputBox.setMaxLength(9);
-        this.hexInputBox.setVisible(false);
-        addRenderableWidget(this.hexInputBox);
+        int searchWidth = Math.max(150, this.dockW - 118);
+        this.searchField = new EditBox(this.font, this.dockX + 10, this.dockY + 8, searchWidth, 20, Component.literal("Search modules..."));
+        this.searchField.setHint(Component.literal("Search modules..."));
+        this.searchField.setMaxLength(64);
+        addRenderableWidget(this.searchField);
     }
 
     @Override
-    public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
-        graphics.fill(0, 0, this.width, this.height, COL_BACKDROP);
-
-        renderLeftSidebar(graphics, mouseX, mouseY);
-        renderMainPanel(graphics, mouseX, mouseY);
-        renderBottomBar(graphics, mouseX, mouseY);
-
-        super.render(graphics, mouseX, mouseY, partialTick);
-
-        if (this.expandedModule != null) {
-            renderModuleSettingsDrawer(graphics, mouseX, mouseY, this.expandedModule);
+    public void render(GuiGraphics g, int mouseX, int mouseY, float partialTick) {
+        g.fill(0, 0, this.width, this.height, BACKDROP);
+        drawRail(g, mouseX, mouseY);
+        drawModuleGrid(g, mouseX, mouseY);
+        drawDock(g, mouseX, mouseY);
+        super.render(g, mouseX, mouseY, partialTick);
+        if (this.openDrawerModule != null) {
+            drawSettingsDrawer(g, mouseX, mouseY, this.openDrawerModule);
         }
     }
 
-    private void renderLeftSidebar(GuiGraphics graphics, int mouseX, int mouseY) {
-        GuiDrawHelper.drawPanel(graphics, sidebarX, sidebarY, sidebarW, sidebarH, COL_SIDEBAR, COL_BORDER);
+    private void drawRail(GuiGraphics g, int mouseX, int mouseY) {
+        GuiDrawHelper.drawBox(g, railX, railY, railW, railH, SIDEBAR_BG, BORDER_COL);
 
-        // Custom geometric emblem (no external branding or copied artwork)
-        int embX = sidebarX + 12;
-        int embY = sidebarY + 12;
-        graphics.fill(embX, embY, embX + 18, embY + 18, COL_ACCENT);
-        graphics.fill(embX + 4, embY + 4, embX + 14, embY + 14, COL_SIDEBAR);
-        graphics.fill(embX + 7, embY + 7, embX + 11, embY + 11, COL_ACCENT);
+        int bx = railX + 12;
+        int by = railY + 12;
+        g.fill(bx, by, bx + 18, by + 18, ACCENT_COL);
+        g.fill(bx + 4, by + 4, bx + 14, by + 14, SIDEBAR_BG);
+        g.fill(bx + 7, by + 7, bx + 11, by + 11, ACCENT_COL);
 
-        graphics.drawString(this.font, "VIEWGRID", embX + 24, embY + 2, COL_TEXT_PRIMARY, false);
-        graphics.drawString(this.font, "1.21.11 Client", embX + 24, embY + 12, COL_TEXT_MUTED, false);
+        g.drawString(this.font, "VIEWGRID", bx + 24, by + 2, TEXT_HI, false);
+        g.drawString(this.font, "1.21.11 Fabric", bx + 24, by + 12, TEXT_LO, false);
 
-        int navY = sidebarY + 42;
-        int navItemH = 26;
+        int y = railY + 42;
+        int rowH = 26;
         for (Category cat : Category.values()) {
-            boolean selected = (cat == this.activeCategory);
-            boolean hovered = GuiDrawHelper.isInside(mouseX, mouseY, sidebarX + 8, navY, sidebarW - 16, navItemH);
-            int rowFill = selected ? 0x3338BDF8 : (hovered ? 0x1AFFFFFF : 0x00000000);
-            graphics.fill(sidebarX + 8, navY, sidebarX + sidebarW - 8, navY + navItemH, rowFill);
-
-            if (selected) {
-                graphics.fill(sidebarX + 8, navY + 4, sidebarX + 11, navY + navItemH - 4, COL_ACCENT);
+            boolean active = (cat == this.currentCategory);
+            boolean hover = GuiDrawHelper.contains(mouseX, mouseY, railX + 8, y, railW - 16, rowH);
+            int bg = active ? 0x3338BDF8 : (hover ? 0x1AFFFFFF : 0x00000000);
+            g.fill(railX + 8, y, railX + railW - 8, y + rowH, bg);
+            if (active) {
+                g.fill(railX + 8, y + 4, railX + 11, y + rowH - 4, ACCENT_COL);
             }
-
-            int count = moduleManager.getByCategoryAndFilter(cat, "").size();
-            graphics.drawString(this.font, cat.getLabel(), sidebarX + 18, navY + 9, selected ? COL_TEXT_PRIMARY : COL_TEXT_MUTED, false);
-            String countStr = String.valueOf(count);
-            graphics.drawString(this.font, countStr, sidebarX + sidebarW - 16 - this.font.width(countStr), navY + 9, COL_TEXT_MUTED, false);
-
-            navY += navItemH + 4;
+            int cnt = moduleManager.filter(cat, "").size();
+            g.drawString(this.font, cat.getTitle(), railX + 18, y + 9, active ? TEXT_HI : TEXT_LO, false);
+            String num = String.valueOf(cnt);
+            g.drawString(this.font, num, railX + railW - 16 - this.font.width(num), y + 9, TEXT_LO, false);
+            y += rowH + 4;
         }
 
-        // Compact footer card: session / account status and active module count
-        int footH = 44;
-        int footX = sidebarX + 8;
-        int footY = sidebarY + sidebarH - footH - 8;
-        int footW = sidebarW - 16;
-        GuiDrawHelper.drawPanel(graphics, footX, footY, footW, footH, 0xCC0B101A, COL_BORDER);
-
-        String userName = (Minecraft.getInstance().getUser() != null)
-            ? Minecraft.getInstance().getUser().getName()
-            : "Offline";
-        graphics.drawString(this.font, "Session: " + userName, footX + 8, footY + 8, COL_TEXT_PRIMARY, false);
-        graphics.drawString(this.font, "Active: " + moduleManager.getActiveCount() + " / " + moduleManager.getModules().size(), footX + 8, footY + 22, COL_ACCENT, false);
+        int fx = railX + 8;
+        int fy = railY + railH - 52;
+        int fw = railW - 16;
+        GuiDrawHelper.drawBox(g, fx, fy, fw, 44, 0xCC0A0F18, BORDER_COL);
+        String user = Minecraft.getInstance().getUser() != null ? Minecraft.getInstance().getUser().getName() : "Offline";
+        g.drawString(this.font, "User: " + user, fx + 8, fy + 8, TEXT_HI, false);
+        g.drawString(this.font, "Enabled: " + moduleManager.countActive() + "/" + moduleManager.getAll().size(), fx + 8, fy + 22, ACCENT_COL, false);
     }
 
-    private void renderMainPanel(GuiGraphics graphics, int mouseX, int mouseY) {
-        GuiDrawHelper.drawPanel(graphics, panelX, panelY, panelW, panelH, COL_PANEL, COL_BORDER);
+    private void drawModuleGrid(GuiGraphics g, int mouseX, int mouseY) {
+        GuiDrawHelper.drawBox(g, bodyX, bodyY, bodyW, bodyH, PANEL_BG, BORDER_COL);
 
-        String query = this.searchBox != null ? this.searchBox.getValue() : "";
-        List<Module> list = moduleManager.getByCategoryAndFilter(
-            query.isBlank() ? this.activeCategory : null,
-            query
-        );
+        String q = this.searchField != null ? this.searchField.getValue() : "";
+        List<Module> items = moduleManager.filter(q.isBlank() ? this.currentCategory : null, q);
 
-        long activeInCat = list.stream().filter(Module::isEnabled).count();
-        String title = query.isBlank() ? this.activeCategory.getLabel() : "Search Results";
-        graphics.drawString(this.font, title, panelX + 14, panelY + 12, COL_TEXT_PRIMARY, false);
-        String meta = list.size() + " modules  |  " + activeInCat + " active";
-        graphics.drawString(this.font, meta, panelX + panelW - 14 - this.font.width(meta), panelY + 12, COL_TEXT_MUTED, false);
+        long enabledCount = items.stream().filter(Module::isEnabled).count();
+        String heading = q.isBlank() ? this.currentCategory.getTitle() : "Search";
+        g.drawString(this.font, heading, bodyX + 14, bodyY + 12, TEXT_HI, false);
+        String rightMeta = items.size() + " total  |  " + enabledCount + " on";
+        g.drawString(this.font, rightMeta, bodyX + bodyW - 14 - this.font.width(rightMeta), bodyY + 12, TEXT_LO, false);
 
-        int gridTop = panelY + 30;
-        int gridLeft = panelX + 12;
-        int gridW = panelW - 24;
+        int top = bodyY + 30;
+        int left = bodyX + 12;
+        int availW = bodyW - 24;
         int cols = 2;
         int gap = 10;
-        int cardW = Math.max(100, (gridW - gap * (cols - 1)) / cols);
-        int cardH = Boolean.TRUE.equals(configManager.isCompactCards()) ? 44 : 54;
+        int cardW = Math.max(100, (availW - gap) / cols);
+        int cardH = Boolean.TRUE.equals(configManager.isCompactLayout()) ? 44 : 54;
 
-        for (int i = 0; i < list.size(); i++) {
-            Module mod = list.get(i);
-            int col = i % cols;
-            int row = i / cols;
-            int cx = gridLeft + col * (cardW + gap);
-            int cy = gridTop + row * (cardH + gap);
+        for (int i = 0; i < items.size(); i++) {
+            Module mod = items.get(i);
+            int c = i % cols;
+            int r = i / cols;
+            int cx = left + c * (cardW + gap);
+            int cy = top + r * (cardH + gap);
+            if (cy + cardH > bodyY + bodyH - 10) break;
 
-            if (cy + cardH > panelY + panelH - 10) {
-                break;
+            int fill = mod.isEnabled() ? CARD_ACTIVE_BG : CARD_BG;
+            int border = mod.isEnabled() ? ACCENT_COL : BORDER_COL;
+            GuiDrawHelper.drawBox(g, cx, cy, cardW, cardH, fill, border);
+
+            g.drawString(this.font, mod.getTitle(), cx + 10, cy + 8, TEXT_HI, false);
+            if (!Boolean.TRUE.equals(configManager.isCompactLayout())) {
+                String desc = this.font.plainSubstrByWidth(mod.getDescription(), Math.max(40, cardW - 68));
+                g.drawString(this.font, desc, cx + 10, cy + 22, TEXT_LO, false);
             }
 
-            int bg = mod.isEnabled() ? COL_CARD_ACTIVE : COL_CARD;
-            int border = mod.isEnabled() ? COL_ACCENT : COL_BORDER;
-            GuiDrawHelper.drawPanel(graphics, cx, cy, cardW, cardH, bg, border);
-
-            graphics.drawString(this.font, mod.getName(), cx + 10, cy + 8, COL_TEXT_PRIMARY, false);
-            if (!Boolean.TRUE.equals(configManager.isCompactCards())) {
-                String trimmed = this.font.plainSubstrByWidth(mod.getSummary(), Math.max(40, cardW - 68));
-                graphics.drawString(this.font, trimmed, cx + 10, cy + 22, COL_TEXT_MUTED, false);
-            }
-
-            // Settings gear / expand button
             int gearX = cx + cardW - 48;
             int gearY = cy + (cardH - 16) / 2;
-            GuiDrawHelper.drawPanel(graphics, gearX, gearY, 16, 16, 0x8824324A, COL_BORDER);
-            graphics.drawString(this.font, "*", gearX + 5, gearY + 4, COL_TEXT_PRIMARY, false);
+            GuiDrawHelper.drawBox(g, gearX, gearY, 16, 16, 0x8824324A, BORDER_COL);
+            g.drawString(this.font, "*", gearX + 5, gearY + 4, TEXT_HI, false);
 
-            // Toggle switch pill
             int swX = cx + cardW - 28;
             int swY = cy + (cardH - 14) / 2;
-            GuiDrawHelper.drawPill(graphics, swX, swY, 20, 14, mod.isEnabled() ? 0xFF0EA5E9 : 0xFF334155, COL_BORDER);
-            int knobX = mod.isEnabled() ? swX + 8 : swX + 2;
-            graphics.fill(knobX, swY + 2, knobX + 10, swY + 12, COL_TEXT_PRIMARY);
+            GuiDrawHelper.drawCapsule(g, swX, swY, 20, 14, mod.isEnabled() ? 0xFF0EA5E9 : 0xFF334155, BORDER_COL);
+            g.fill(mod.isEnabled() ? swX + 8 : swX + 2, swY + 2, (mod.isEnabled() ? swX + 8 : swX + 2) + 10, swY + 12, TEXT_HI);
         }
     }
 
-    private void renderModuleSettingsDrawer(GuiGraphics graphics, int mouseX, int mouseY, Module mod) {
+    private void drawSettingsDrawer(GuiGraphics g, int mouseX, int mouseY, Module mod) {
         int dw = Math.min(260, this.width - 40);
         int dh = Math.min(260, this.height - 80);
         int dx = (this.width - dw) / 2;
         int dy = (this.height - dh) / 2;
 
-        GuiDrawHelper.drawPanel(graphics, dx, dy, dw, dh, 0xF50B101B, COL_ACCENT);
-        graphics.drawString(this.font, mod.getName() + " Settings", dx + 12, dy + 10, COL_TEXT_PRIMARY, false);
-        graphics.drawString(this.font, "[X]", dx + dw - 24, dy + 10, 0xFFFF6B6B, false);
+        GuiDrawHelper.drawBox(g, dx, dy, dw, dh, 0xF50A0F1A, ACCENT_COL);
+        g.drawString(this.font, mod.getTitle(), dx + 12, dy + 10, TEXT_HI, false);
+        g.drawString(this.font, "[X]", dx + dw - 24, dy + 10, 0xFFFF6B6B, false);
 
         int sy = dy + 28;
-        // Keybind row
-        String keyLabel = (listeningKeybindModule == mod)
-            ? "Press any key..."
-            : "Bind: " + (mod.getKeybind() == GLFW.GLFW_KEY_UNKNOWN ? "None" : GLFW.glfwGetKeyName(mod.getKeybind(), 0));
-        GuiDrawHelper.drawPanel(graphics, dx + 12, sy, dw - 24, 18, 0x991E293B, COL_BORDER);
-        graphics.drawString(this.font, keyLabel, dx + 18, sy + 5, COL_ACCENT, false);
+        String bindText = (bindingModule == mod)
+            ? "Press key..."
+            : "Keybind: " + (mod.getKeybind() == GLFW.GLFW_KEY_UNKNOWN ? "None" : GLFW.glfwGetKeyName(mod.getKeybind(), 0));
+        GuiDrawHelper.drawBox(g, dx + 12, sy, dw - 24, 18, 0x991E293B, BORDER_COL);
+        g.drawString(this.font, bindText, dx + 18, sy + 5, ACCENT_COL, false);
         sy += 22;
 
-        for (Setting<?> setting : mod.getSettings()) {
+        for (Setting<?> s : mod.getSettings()) {
             if (sy + 20 > dy + dh - 10) break;
-            switch (setting.getType()) {
-                case BOOLEAN -> {
+            switch (s.getKind()) {
+                case TOGGLE -> {
                     @SuppressWarnings("unchecked")
-                    Setting<Boolean> bs = (Setting<Boolean>) setting;
-                    String stateStr = Boolean.TRUE.equals(bs.getValue()) ? "[ON]" : "[OFF]";
-                    graphics.drawString(this.font, bs.getLabel() + ": " + stateStr, dx + 12, sy + 5, COL_TEXT_PRIMARY, false);
+                    Setting<Boolean> ts = (Setting<Boolean>) s;
+                    g.drawString(this.font, ts.getLabel() + ": " + (Boolean.TRUE.equals(ts.get()) ? "ON" : "OFF"), dx + 12, sy + 5, TEXT_HI, false);
                 }
-                case DOUBLE -> {
+                case SLIDER_DOUBLE -> {
                     @SuppressWarnings("unchecked")
-                    Setting<Double> ds = (Setting<Double>) setting;
-                    double frac = (ds.getValue() - ds.getMinDouble()) / Math.max(1e-6, ds.getMaxDouble() - ds.getMinDouble());
-                    int barW = dw - 24;
-                    graphics.fill(dx + 12, sy + 12, dx + 12 + barW, sy + 16, 0xFF1E293B);
-                    graphics.fill(dx + 12, sy + 12, dx + 12 + (int) (barW * frac), sy + 16, COL_ACCENT);
-                    graphics.drawString(this.font, String.format("%s: %.2f", ds.getLabel(), ds.getValue()), dx + 12, sy + 2, COL_TEXT_PRIMARY, false);
+                    Setting<Double> ds = (Setting<Double>) s;
+                    double p = (ds.get() - ds.getMinD()) / Math.max(1e-6, ds.getMaxD() - ds.getMinD());
+                    int bw = dw - 24;
+                    g.fill(dx + 12, sy + 12, dx + 12 + bw, sy + 16, 0xFF1E293B);
+                    g.fill(dx + 12, sy + 12, dx + 12 + (int) (bw * p), sy + 16, ACCENT_COL);
+                    g.drawString(this.font, String.format("%s: %.2f", ds.getLabel(), ds.get()), dx + 12, sy + 2, TEXT_HI, false);
                 }
-                case INT -> {
+                case SLIDER_INT -> {
                     @SuppressWarnings("unchecked")
-                    Setting<Integer> is = (Setting<Integer>) setting;
-                    double frac = (double) (is.getValue() - is.getMinInt()) / Math.max(1, is.getMaxInt() - is.getMinInt());
-                    int barW = dw - 24;
-                    graphics.fill(dx + 12, sy + 12, dx + 12 + barW, sy + 16, 0xFF1E293B);
-                    graphics.fill(dx + 12, sy + 12, dx + 12 + (int) (barW * frac), sy + 16, COL_ACCENT);
-                    graphics.drawString(this.font, is.getLabel() + ": " + is.getValue(), dx + 12, sy + 2, COL_TEXT_PRIMARY, false);
+                    Setting<Integer> is = (Setting<Integer>) s;
+                    double p = (double) (is.get() - is.getMinI()) / Math.max(1, is.getMaxI() - is.getMinI());
+                    int bw = dw - 24;
+                    g.fill(dx + 12, sy + 12, dx + 12 + bw, sy + 16, 0xFF1E293B);
+                    g.fill(dx + 12, sy + 12, dx + 12 + (int) (bw * p), sy + 16, ACCENT_COL);
+                    g.drawString(this.font, is.getLabel() + ": " + is.get(), dx + 12, sy + 2, TEXT_HI, false);
                 }
-                case ENUM -> {
+                case DROPDOWN -> {
                     @SuppressWarnings("unchecked")
-                    Setting<Enum<?>> es = (Setting<Enum<?>>) setting;
-                    graphics.drawString(this.font, es.getLabel() + ": < " + es.getValue().name() + " >", dx + 12, sy + 5, COL_TEXT_PRIMARY, false);
+                    Setting<Enum<?>> es = (Setting<Enum<?>>) s;
+                    g.drawString(this.font, es.getLabel() + ": " + es.get().name(), dx + 12, sy + 5, TEXT_HI, false);
                 }
-                case COLOR -> {
+                case COLOR_PICKER -> {
                     @SuppressWarnings("unchecked")
-                    Setting<ColorRgba> cs = (Setting<ColorRgba>) setting;
-                    graphics.drawString(this.font, cs.getLabel(), dx + 12, sy + 5, COL_TEXT_PRIMARY, false);
-                    GuiDrawHelper.drawSwatch(graphics, dx + dw - 30, sy + 2, 14, cs.getValue());
+                    Setting<ColorRgba> cs = (Setting<ColorRgba>) s;
+                    g.drawString(this.font, cs.getLabel(), dx + 12, sy + 5, TEXT_HI, false);
+                    GuiDrawHelper.drawSwatch(g, dx + dw - 30, sy + 2, 14, cs.get());
                 }
-                case BLOCK_LIST -> {
-                    graphics.drawString(this.font, setting.getLabel() + " (configured)", dx + 12, sy + 5, COL_TEXT_MUTED, false);
-                }
+                case BLOCK_FILTER -> g.drawString(this.font, s.getLabel() + " (in config JSON)", dx + 12, sy + 5, TEXT_LO, false);
             }
             sy += 22;
         }
     }
 
-    private void renderBottomBar(GuiGraphics graphics, int mouseX, int mouseY) {
-        GuiDrawHelper.drawPill(graphics, barX, barY, barW, barH, COL_SIDEBAR, COL_BORDER);
+    private void drawDock(GuiGraphics g, int mouseX, int mouseY) {
+        GuiDrawHelper.drawCapsule(g, dockX, dockY, dockW, dockH, SIDEBAR_BG, BORDER_COL);
+        int bx = dockX + dockW - 96;
+        int by = dockY + 8;
+        GuiDrawHelper.drawBox(g, bx, by, 24, 20, configManager.isSoundFeedback() ? 0x4438BDF8 : 0x441E293B, BORDER_COL);
+        g.drawString(this.font, "A", bx + 9, by + 6, TEXT_HI, false);
 
-        int bx = barX + barW - 96;
-        int by = barY + 8;
+        GuiDrawHelper.drawBox(g, bx + 30, by, 24, 20, configManager.isCompactLayout() ? 0x4438BDF8 : 0x441E293B, BORDER_COL);
+        g.drawString(this.font, "C", bx + 39, by + 6, TEXT_HI, false);
 
-        // Quick action 1: Audio feedback toggle
-        GuiDrawHelper.drawPanel(graphics, bx, by, 24, 20, configManager.isAudioFeedback() ? 0x4438BDF8 : 0x441E293B, COL_BORDER);
-        graphics.drawString(this.font, "S", bx + 9, by + 6, COL_TEXT_PRIMARY, false);
-
-        // Quick action 2: Compact card layout toggle
-        GuiDrawHelper.drawPanel(graphics, bx + 30, by, 24, 20, configManager.isCompactCards() ? 0x4438BDF8 : 0x441E293B, COL_BORDER);
-        graphics.drawString(this.font, "L", bx + 39, by + 6, COL_TEXT_PRIMARY, false);
-
-        // Quick action 3: Save config button
-        GuiDrawHelper.drawPanel(graphics, bx + 60, by, 26, 20, 0x4410B981, COL_BORDER);
-        graphics.drawString(this.font, "CFG", bx + 64, by + 6, COL_TEXT_PRIMARY, false);
+        GuiDrawHelper.drawBox(g, bx + 60, by, 26, 20, 0x4410B981, BORDER_COL);
+        g.drawString(this.font, "SAVE", bx + 63, by + 6, TEXT_HI, false);
     }
 
     @Override
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
-        if (this.expandedModule != null) {
+        if (this.openDrawerModule != null) {
             int dw = Math.min(260, this.width - 40);
             int dh = Math.min(260, this.height - 80);
             int dx = (this.width - dw) / 2;
             int dy = (this.height - dh) / 2;
 
-            if (GuiDrawHelper.isInside(mouseX, mouseY, dx + dw - 28, dy + 6, 22, 16)
-                || !GuiDrawHelper.isInside(mouseX, mouseY, dx, dy, dw, dh)) {
-                this.expandedModule = null;
-                this.listeningKeybindModule = null;
-                this.activeColorSetting = null;
-                this.hexInputBox.setVisible(false);
+            if (GuiDrawHelper.contains(mouseX, mouseY, dx + dw - 28, dy + 6, 22, 16)
+                || !GuiDrawHelper.contains(mouseX, mouseY, dx, dy, dw, dh)) {
+                this.openDrawerModule = null;
+                this.bindingModule = null;
                 this.configManager.save();
                 return true;
             }
 
             int sy = dy + 28;
-            if (GuiDrawHelper.isInside(mouseX, mouseY, dx + 12, sy, dw - 24, 18)) {
-                this.listeningKeybindModule = this.expandedModule;
+            if (GuiDrawHelper.contains(mouseX, mouseY, dx + 12, sy, dw - 24, 18)) {
+                this.bindingModule = this.openDrawerModule;
                 return true;
             }
             sy += 22;
 
-            for (Setting<?> setting : this.expandedModule.getSettings()) {
+            for (Setting<?> s : this.openDrawerModule.getSettings()) {
                 if (sy + 20 > dy + dh - 10) break;
-                if (GuiDrawHelper.isInside(mouseX, mouseY, dx + 12, sy, dw - 24, 20)) {
-                    handleSettingClick(setting, mouseX, dx + 12, dw - 24, button);
+                if (GuiDrawHelper.contains(mouseX, mouseY, dx + 12, sy, dw - 24, 20)) {
+                    mutateSetting(s, mouseX, dx + 12, dw - 24, button);
                     this.configManager.save();
                     return true;
                 }
@@ -331,72 +292,65 @@ public final class ClickGuiScreen extends Screen {
             return true;
         }
 
-        // Sidebar categories
-        int navY = sidebarY + 42;
-        int navItemH = 26;
+        int y = railY + 42;
+        int rowH = 26;
         for (Category cat : Category.values()) {
-            if (GuiDrawHelper.isInside(mouseX, mouseY, sidebarX + 8, navY, sidebarW - 16, navItemH)) {
-                this.activeCategory = cat;
-                this.configManager.setLastCategory(cat.name());
+            if (GuiDrawHelper.contains(mouseX, mouseY, railX + 8, y, railW - 16, rowH)) {
+                this.currentCategory = cat;
+                this.configManager.setSelectedCategory(cat.name());
                 this.configManager.save();
                 return true;
             }
-            navY += navItemH + 4;
+            y += rowH + 4;
         }
 
-        // Module cards
-        String query = this.searchBox != null ? this.searchBox.getValue() : "";
-        List<Module> list = moduleManager.getByCategoryAndFilter(
-            query.isBlank() ? this.activeCategory : null,
-            query
-        );
-        int gridTop = panelY + 30;
-        int gridLeft = panelX + 12;
-        int gridW = panelW - 24;
+        String q = this.searchField != null ? this.searchField.getValue() : "";
+        List<Module> items = moduleManager.filter(q.isBlank() ? this.currentCategory : null, q);
+        int top = bodyY + 30;
+        int left = bodyX + 12;
+        int availW = bodyW - 24;
         int cols = 2;
         int gap = 10;
-        int cardW = Math.max(100, (gridW - gap * (cols - 1)) / cols);
-        int cardH = Boolean.TRUE.equals(configManager.isCompactCards()) ? 44 : 54;
+        int cardW = Math.max(100, (availW - gap) / cols);
+        int cardH = Boolean.TRUE.equals(configManager.isCompactLayout()) ? 44 : 54;
 
-        for (int i = 0; i < list.size(); i++) {
-            Module mod = list.get(i);
-            int col = i % cols;
-            int row = i / cols;
-            int cx = gridLeft + col * (cardW + gap);
-            int cy = gridTop + row * (cardH + gap);
-            if (cy + cardH > panelY + panelH - 10) break;
+        for (int i = 0; i < items.size(); i++) {
+            Module mod = items.get(i);
+            int c = i % cols;
+            int r = i / cols;
+            int cx = left + c * (cardW + gap);
+            int cy = top + r * (cardH + gap);
+            if (cy + cardH > bodyY + bodyH - 10) break;
 
             int gearX = cx + cardW - 48;
             int gearY = cy + (cardH - 16) / 2;
-            if (GuiDrawHelper.isInside(mouseX, mouseY, gearX, gearY, 16, 16) || button == 1) {
-                if (GuiDrawHelper.isInside(mouseX, mouseY, cx, cy, cardW, cardH)) {
-                    this.expandedModule = mod;
-                    this.listeningKeybindModule = null;
+            if (GuiDrawHelper.contains(mouseX, mouseY, cx, cy, cardW, cardH)) {
+                if (GuiDrawHelper.contains(mouseX, mouseY, gearX, gearY, 16, 16) || button == 1) {
+                    this.openDrawerModule = mod;
+                    this.bindingModule = null;
+                    return true;
+                }
+                if (button == 0) {
+                    mod.toggle();
+                    this.configManager.save();
                     return true;
                 }
             }
-
-            if (GuiDrawHelper.isInside(mouseX, mouseY, cx, cy, cardW, cardH) && button == 0) {
-                mod.toggle();
-                this.configManager.save();
-                return true;
-            }
         }
 
-        // Bottom quick-action buttons
-        int bx = barX + barW - 96;
-        int by = barY + 8;
-        if (GuiDrawHelper.isInside(mouseX, mouseY, bx, by, 24, 20)) {
-            configManager.setAudioFeedback(!configManager.isAudioFeedback());
+        int bx = dockX + dockW - 96;
+        int by = dockY + 8;
+        if (GuiDrawHelper.contains(mouseX, mouseY, bx, by, 24, 20)) {
+            configManager.setSoundFeedback(!configManager.isSoundFeedback());
             configManager.save();
             return true;
         }
-        if (GuiDrawHelper.isInside(mouseX, mouseY, bx + 30, by, 24, 20)) {
-            configManager.setCompactCards(!configManager.isCompactCards());
+        if (GuiDrawHelper.contains(mouseX, mouseY, bx + 30, by, 24, 20)) {
+            configManager.setCompactLayout(!configManager.isCompactLayout());
             configManager.save();
             return true;
         }
-        if (GuiDrawHelper.isInside(mouseX, mouseY, bx + 60, by, 26, 20)) {
+        if (GuiDrawHelper.contains(mouseX, mouseY, bx + 60, by, 26, 20)) {
             configManager.save();
             return true;
         }
@@ -405,64 +359,56 @@ public final class ClickGuiScreen extends Screen {
     }
 
     @SuppressWarnings("unchecked")
-    private void handleSettingClick(Setting<?> setting, double mouseX, int rowX, int rowW, int button) {
-        switch (setting.getType()) {
-            case BOOLEAN -> {
-                Setting<Boolean> bs = (Setting<Boolean>) setting;
-                bs.setValue(!Boolean.TRUE.equals(bs.getValue()));
+    private void mutateSetting(Setting<?> s, double mouseX, int rx, int rw, int button) {
+        switch (s.getKind()) {
+            case TOGGLE -> {
+                Setting<Boolean> ts = (Setting<Boolean>) s;
+                ts.set(!Boolean.TRUE.equals(ts.get()));
             }
-            case DOUBLE -> {
-                Setting<Double> ds = (Setting<Double>) setting;
-                double frac = Math.max(0.0, Math.min(1.0, (mouseX - rowX) / Math.max(1.0, rowW)));
-                ds.setValue(ds.getMinDouble() + frac * (ds.getMaxDouble() - ds.getMinDouble()));
+            case SLIDER_DOUBLE -> {
+                Setting<Double> ds = (Setting<Double>) s;
+                double frac = Math.max(0.0, Math.min(1.0, (mouseX - rx) / Math.max(1.0, rw)));
+                ds.set(ds.getMinD() + frac * (ds.getMaxD() - ds.getMinD()));
             }
-            case INT -> {
-                Setting<Integer> is = (Setting<Integer>) setting;
-                double frac = Math.max(0.0, Math.min(1.0, (mouseX - rowX) / Math.max(1.0, rowW)));
-                int val = (int) Math.round(is.getMinInt() + frac * (is.getMaxInt() - is.getMinInt()));
-                is.setValue(val);
+            case SLIDER_INT -> {
+                Setting<Integer> is = (Setting<Integer>) s;
+                double frac = Math.max(0.0, Math.min(1.0, (mouseX - rx) / Math.max(1.0, rw)));
+                is.set((int) Math.round(is.getMinI() + frac * (is.getMaxI() - is.getMinI())));
             }
-            case ENUM -> {
-                Setting<Enum<?>> es = (Setting<Enum<?>>) setting;
-                Enum<?>[] vals = es.getEnumConstants();
+            case DROPDOWN -> {
+                Setting<Enum<?>> es = (Setting<Enum<?>>) s;
+                Enum<?>[] vals = es.getChoices();
                 if (vals != null && vals.length > 0) {
-                    int idx = es.getValue().ordinal();
-                    int next = (button == 1) ? (idx - 1 + vals.length) % vals.length : (idx + 1) % vals.length;
-                    es.setValue(vals[next]);
+                    int idx = es.get().ordinal();
+                    es.set(vals[(button == 1 ? idx - 1 + vals.length : idx + 1) % vals.length]);
                 }
             }
-            case COLOR -> {
-                Setting<ColorRgba> cs = (Setting<ColorRgba>) setting;
-                ColorRgba cur = cs.getValue();
-                // Cycle quick presets on click; hex field can also be used when expanded.
-                ColorRgba next = new ColorRgba((cur.getR() + 64) % 256, (cur.getG() + 48) % 256, (cur.getB() + 96) % 256, cur.getA());
-                cs.setValue(next);
-                this.activeColorSetting = cs;
-                this.hexInputBox.setValue(next.toHex8());
+            case COLOR_PICKER -> {
+                Setting<ColorRgba> cs = (Setting<ColorRgba>) s;
+                ColorRgba cur = cs.get();
+                cs.set(new ColorRgba((cur.getR() + 64) % 256, (cur.getG() + 48) % 256, (cur.getB() + 96) % 256, cur.getA()));
             }
-            case BLOCK_LIST -> {
-                // Editable via config/viewgrid/config.json or extended text drawer.
+            case BLOCK_FILTER -> {
             }
         }
     }
 
     @Override
     public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
-        if (this.listeningKeybindModule != null) {
+        if (this.bindingModule != null) {
             if (keyCode == GLFW.GLFW_KEY_ESCAPE || keyCode == GLFW.GLFW_KEY_DELETE) {
-                this.listeningKeybindModule.setKeybind(GLFW.GLFW_KEY_UNKNOWN);
+                this.bindingModule.setKeybind(GLFW.GLFW_KEY_UNKNOWN);
             } else {
-                this.listeningKeybindModule.setKeybind(keyCode);
+                this.bindingModule.setKeybind(keyCode);
             }
-            this.listeningKeybindModule = null;
+            this.bindingModule = null;
             this.configManager.save();
             return true;
         }
 
-        boolean ctrl = (modifiers & GLFW.GLFW_MOD_CONTROL) != 0;
-        if (ctrl && keyCode == GLFW.GLFW_KEY_F && this.searchBox != null) {
-            setFocused(this.searchBox);
-            this.searchBox.setFocused(true);
+        if ((modifiers & GLFW.GLFW_MOD_CONTROL) != 0 && keyCode == GLFW.GLFW_KEY_F && this.searchField != null) {
+            setFocused(this.searchField);
+            this.searchField.setFocused(true);
             return true;
         }
 

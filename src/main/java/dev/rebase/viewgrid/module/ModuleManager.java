@@ -6,6 +6,7 @@ import dev.rebase.viewgrid.module.impl.CustomSkyModule;
 import dev.rebase.viewgrid.module.impl.FreeCamModule;
 import dev.rebase.viewgrid.module.impl.FreeLookModule;
 import dev.rebase.viewgrid.module.impl.StorageEspModule;
+import dev.rebase.viewgrid.module.impl.SusChunkFinderModule;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -15,23 +16,15 @@ import java.util.Locale;
 public final class ModuleManager {
     private final List<Module> modules = new ArrayList<>();
 
-    private final StorageEspModule storageEsp;
-    private final BlockEspModule blockEsp;
-    private final ChunkFinderModule chunkFinder;
-    private final SusChunkFinderModule susChunkFinder;
-    private final FreeLookModule freeLook;
-    private final FreeCamModule freeCam;
-    private final CustomSkyModule customSky;
+    private final StorageEspModule storageEsp = new StorageEspModule();
+    private final BlockEspModule blockEsp = new BlockEspModule();
+    private final ChunkFinderModule chunkFinder = new ChunkFinderModule();
+    private final SusChunkFinderModule susChunkFinder = new SusChunkFinderModule();
+    private final FreeLookModule freeLook = new FreeLookModule();
+    private final FreeCamModule freeCam = new FreeCamModule();
+    private final CustomSkyModule customSky = new CustomSkyModule();
 
     public ModuleManager() {
-        this.storageEsp = new StorageEspModule();
-        this.blockEsp = new BlockEspModule();
-        this.chunkFinder = new ChunkFinderModule();
-        this.susChunkFinder = new SusChunkFinderModule();
-        this.freeLook = new FreeLookModule();
-        this.freeCam = new FreeCamModule();
-        this.customSky = new CustomSkyModule();
-
         Collections.addAll(
             this.modules,
             this.storageEsp,
@@ -44,30 +37,26 @@ public final class ModuleManager {
         );
     }
 
-    public List<Module> getModules() {
+    public List<Module> getAll() {
         return Collections.unmodifiableList(this.modules);
     }
 
-    public List<Module> getByCategoryAndFilter(Category category, String query) {
-        String q = query == null ? "" : query.trim().toLowerCase(Locale.ROOT);
-        List<Module> out = new ArrayList<>();
+    public List<Module> filter(Category category, String query) {
+        String needle = query == null ? "" : query.trim().toLowerCase(Locale.ROOT);
+        List<Module> result = new ArrayList<>();
         for (Module m : this.modules) {
-            if (category != null && m.getCategory() != category) {
-                continue;
+            if (category != null && m.getCategory() != category) continue;
+            if (!needle.isEmpty()) {
+                boolean hitTitle = m.getTitle().toLowerCase(Locale.ROOT).contains(needle);
+                boolean hitDesc = m.getDescription().toLowerCase(Locale.ROOT).contains(needle);
+                if (!hitTitle && !hitDesc) continue;
             }
-            if (!q.isEmpty()) {
-                boolean matchesName = m.getName().toLowerCase(Locale.ROOT).contains(q);
-                boolean matchesSummary = m.getSummary().toLowerCase(Locale.ROOT).contains(q);
-                if (!matchesName && !matchesSummary) {
-                    continue;
-                }
-            }
-            out.add(m);
+            result.add(m);
         }
-        return out;
+        return result;
     }
 
-    public long getActiveCount() {
+    public long countActive() {
         return this.modules.stream().filter(Module::isEnabled).count();
     }
 

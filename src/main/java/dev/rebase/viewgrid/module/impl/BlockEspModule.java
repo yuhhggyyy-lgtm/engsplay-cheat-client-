@@ -24,183 +24,160 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 public final class BlockEspModule extends Module {
-    public enum Mode {
-        OUTLINE,
-        FILLED_BOX,
-        BOTH
-    }
+    public enum RenderMode { OUTLINE, FILLED_BOX, BOTH }
 
-    private final Setting<String> blockFilter = registerSetting(
-        Setting.blockList(
-            "block_filter",
-            "Target Blocks (CSV)",
+    private final Setting<String> targetsCsv = addSetting(
+        Setting.blockFilter(
+            "targets_csv",
+            "Target Blocks",
             "minecraft:ancient_debris, minecraft:diamond_ore, minecraft:deepslate_diamond_ore, minecraft:spawner"
         )
     );
-    private final Setting<ColorRgba> espColor = registerSetting(
-        Setting.color("esp_color", "Highlight Color", new ColorRgba(56, 212, 255, 190))
+    private final Setting<ColorRgba> color = addSetting(
+        Setting.colorPicker("color", "ESP Color", new ColorRgba(56, 212, 255, 190))
     );
-    private final Setting<Mode> renderMode = registerSetting(
-        Setting.choice("render_mode", "Render Mode", Mode.BOTH, Mode.class)
+    private final Setting<RenderMode> renderMode = addSetting(
+        Setting.dropdown("render_mode", "Render Mode", RenderMode.BOTH, RenderMode.class)
     );
-    private final Setting<Integer> maxRadius = registerSetting(
-        Setting.rangedInt("max_radius", "Max Scan Radius", 48, 8, 128)
+    private final Setting<Integer> radius = addSetting(
+        Setting.sliderInt("radius", "Max Radius", 48, 8, 128)
     );
 
-    private final Map<Long, Set<BlockPos>> chunkMatches = new ConcurrentHashMap<>();
-    private final Set<Long> dirtyChunks = ConcurrentHashMap.newKeySet();
-    private String lastAppliedFilter = "";
-    private volatile List<BlockPos> activePositions = Collections.emptyList();
+    private final Map<Long, Set<BlockPos>> cacheByChunk = new ConcurrentHashMap<>();
+    private final Set<Long> queuedChunks = ConcurrentHashMap.newKeySet();
+    private String lastFilter = "";
+    private volatile List<BlockPos> flatMatches = Collections.emptyList();
 
     public BlockEspModule() {
         super(
             "block_esp",
             "Block ESP",
-            "Caches matching blocks per chunk and updates on load, unload, or block change.",
+            "Caches matching blocks by chunk and updates on chunk load/unload or block edits.",
             Category.VISUALS
         );
     }
 
     @Override
-    protected void onEnable() {
-        this.dirtyChunks.clear();
-        this.chunkMatches.clear();
-        this.lastAppliedFilter = "";
-        this.activePositions = Collections.emptyList();
+    protected void onActivate() {
+        this.cacheByChunk.clear();
+        this.queuedChunks.clear();
+        this.lastFilter = "";
+        this.flatMatches = Collections.emptyList();
     }
 
     @Override
-    protected void onDisable() {
-        this.dirtyChunks.clear();
-        this.chunkMatches.clear();
-        this.activePositions = Collections.emptyList();
+    protected void onDeactivate() {
+        this.cacheByChunk.clear();
+        this.queuedChunks.clear();
+        this.flatMatches = Collections.emptyList();
     }
 
-    public void onChunkLoaded(long chunkKey) {
-        if (isEnabled()) {
-            this.dirtyChunks.add(chunkKey);
+    public void notifyChunkLoaded(long chunkKey) {
+        if (isEnabled()) this.queuedChunks.add(chunkKey);
+    }
+
+    public void notifyChunkUnloaded(long chunkKey) {
+        this.queuedChunks.remove(chunkKey);
+        if (this.cacheByChunk.remove(chunkKey) != null && isEnabled()) {
+            rebuildSnapshot();
         }
     }
 
-    public void onChunkUnloaded(long chunkKey) {
-        this.dirtyChunks.remove(chunkKey);
-        if (this.chunkMatches.remove(chunkKey) != null && isEnabled()) {
-            rebuildFlatSnapshot();
-        }
-    }
-
-    public void onBlockChanged(BlockPos pos, BlockState newState) {
-        if (!isEnabled() || pos == null) {
-            return;
-        }
-        Set<String> targets = ConfigManager.parseBlockFilterSet(this.blockFilter.getValue());
+    public void notifyBlockChange(BlockPos pos, BlockState state) {
+        if (!isEnabled() || pos == null) return;
+        Set<String> filter = ConfigManager.normalizeBlockIds(this.targetsCsv.get());
         long key = ChunkPos.asLong(pos);
-        Set<BlockPos> set = this.chunkMatches.computeIfAbsent(key, k -> ConcurrentHashMap.newKeySet());
-        BlockPos immutable = pos.immutable();
-        if (matchesFilter(newState, targets)) {
-            set.add(immutable);
+        Set<BlockPos> set = this.cacheByChunk.computeIfAbsent(key, k -> ConcurrentHashMap.newKeySet());
+        BlockPos copyPos = pos.immutable();
+        if (matches(state, filter)) {
+            set.add(copyPos);
         } else {
-            set.remove(immutable);
+            set.remove(copyPos);
         }
-        rebuildFlatSnapshot();
+        rebuildSnapshot();
     }
 
     @Override
-    public void onTick(Minecraft client) {
-        if (client.level == null || client.player == null) {
-            return;
-        }
-        String currentFilter = this.blockFilter.getValue();
-        if (!currentFilter.equals(this.lastAppliedFilter)) {
-            this.lastAppliedFilter = currentFilter;
-            this.chunkMatches.clear();
-            queueLoadedChunksInRadius(client.level, client.player.blockPosition(), this.maxRadius.getValue());
+    public void onTick(Minecraft mc) {
+        if (mc.level == null || mc.player == null) return;
+        String filterStr = this.targetsCsv.get();
+        if (!filterStr.equals(this.lastFilter)) {
+            this.lastFilter = filterStr;
+            this.cacheByChunk.clear();
         }
 
-        queueLoadedChunksInRadius(client.level, client.player.blockPosition(), this.maxRadius.getValue());
-
-        if (!this.dirtyChunks.isEmpty()) {
-            Set<String> targets = ConfigManager.parseBlockFilterSet(currentFilter);
-            int processed = 0;
-            for (Long key : new ArrayList<>(this.dirtyChunks)) {
-                this.dirtyChunks.remove(key);
-                scanChunk(client.level, key, targets);
-                processed++;
-                if (processed >= 4) {
-                    break;
-                }
+        enqueueAround(mc.level, mc.player.blockPosition(), this.radius.get());
+        if (!this.queuedChunks.isEmpty()) {
+            Set<String> filter = ConfigManager.normalizeBlockIds(filterStr);
+            int budget = 4;
+            for (Long key : new ArrayList<>(this.queuedChunks)) {
+                this.queuedChunks.remove(key);
+                scanSingleChunk(mc.level, key, filter);
+                if (--budget <= 0) break;
             }
-            rebuildFlatSnapshot();
+            rebuildSnapshot();
         }
     }
 
-    private void queueLoadedChunksInRadius(Level level, BlockPos origin, int radius) {
-        int chunkRadius = Math.max(1, (radius + 15) / 16);
-        int centerX = origin.getX() >> 4;
-        int centerZ = origin.getZ() >> 4;
-        for (int cx = centerX - chunkRadius; cx <= centerX + chunkRadius; cx++) {
-            for (int cz = centerZ - chunkRadius; cz <= centerZ + chunkRadius; cz++) {
+    private void enqueueAround(Level level, BlockPos center, int r) {
+        int chunkR = Math.max(1, (r + 15) / 16);
+        int cx0 = center.getX() >> 4;
+        int cz0 = center.getZ() >> 4;
+        for (int cx = cx0 - chunkR; cx <= cx0 + chunkR; cx++) {
+            for (int cz = cz0 - chunkR; cz <= cz0 + chunkR; cz++) {
                 long key = ChunkPos.asLong(cx, cz);
-                if (!this.chunkMatches.containsKey(key) && level.hasChunk(cx, cz)) {
-                    this.dirtyChunks.add(key);
+                if (!this.cacheByChunk.containsKey(key) && level.hasChunk(cx, cz)) {
+                    this.queuedChunks.add(key);
                 }
             }
         }
     }
 
-    private void scanChunk(Level level, long chunkKey, Set<String> targets) {
-        int cx = ChunkPos.getX(chunkKey);
-        int cz = ChunkPos.getZ(chunkKey);
+    private void scanSingleChunk(Level level, long key, Set<String> filter) {
+        int cx = ChunkPos.getX(key);
+        int cz = ChunkPos.getZ(key);
         LevelChunk chunk = level.getChunkSource().getChunk(cx, cz, false);
-        if (chunk == null || targets.isEmpty()) {
-            this.chunkMatches.put(chunkKey, new HashSet<>());
+        if (chunk == null || filter.isEmpty()) {
+            this.cacheByChunk.put(key, new HashSet<>());
             return;
         }
-
         Set<BlockPos> found = new HashSet<>();
         LevelChunkSection[] sections = chunk.getSections();
-        int minSection = level.getMinSectionY();
-
-        for (int idx = 0; idx < sections.length; idx++) {
-            LevelChunkSection section = sections[idx];
-            if (section == null || section.hasOnlyAir()) {
-                continue;
-            }
-            int baseY = (minSection + idx) << 4;
+        int minSec = level.getMinSectionY();
+        for (int i = 0; i < sections.length; i++) {
+            LevelChunkSection sec = sections[i];
+            if (sec == null || sec.hasOnlyAir()) continue;
+            int baseY = (minSec + i) << 4;
             for (int ly = 0; ly < 16; ly++) {
                 for (int lz = 0; lz < 16; lz++) {
                     for (int lx = 0; lx < 16; lx++) {
-                        BlockState state = section.getBlockState(lx, ly, lz);
-                        if (matchesFilter(state, targets)) {
+                        BlockState st = sec.getBlockState(lx, ly, lz);
+                        if (matches(st, filter)) {
                             found.add(new BlockPos((cx << 4) + lx, baseY + ly, (cz << 4) + lz));
                         }
                     }
                 }
             }
         }
-        this.chunkMatches.put(chunkKey, found);
+        this.cacheByChunk.put(key, found);
     }
 
-    private boolean matchesFilter(BlockState state, Set<String> targets) {
-        if (state == null || state.isAir() || targets.isEmpty()) {
-            return false;
+    private boolean matches(BlockState st, Set<String> filter) {
+        if (st == null || st.isAir() || filter.isEmpty()) return false;
+        ResourceLocation id = BuiltInRegistries.BLOCK.getKey(st.getBlock());
+        return id != null && filter.contains(id.toString().toLowerCase());
+    }
+
+    private void rebuildSnapshot() {
+        List<BlockPos> all = new ArrayList<>();
+        for (Set<BlockPos> s : this.cacheByChunk.values()) {
+            if (s != null && !s.isEmpty()) all.addAll(s);
         }
-        ResourceLocation id = BuiltInRegistries.BLOCK.getKey(state.getBlock());
-        return id != null && targets.contains(id.toString().toLowerCase());
+        this.flatMatches = Collections.unmodifiableList(all);
     }
 
-    private void rebuildFlatSnapshot() {
-        List<BlockPos> out = new ArrayList<>();
-        for (Set<BlockPos> s : this.chunkMatches.values()) {
-            if (s != null && !s.isEmpty()) {
-                out.addAll(s);
-            }
-        }
-        this.activePositions = Collections.unmodifiableList(out);
-    }
-
-    public List<BlockPos> getActivePositions() { return activePositions; }
-    public ColorRgba getEspColor() { return espColor.getValue().copy(); }
-    public Mode getRenderMode() { return renderMode.getValue(); }
-    public int getMaxRadius() { return maxRadius.getValue(); }
+    public List<BlockPos> getFlatMatches() { return flatMatches; }
+    public ColorRgba getColor() { return color.get().copy(); }
+    public RenderMode getRenderMode() { return renderMode.get(); }
+    public int getRadius() { return radius.get(); }
 }
